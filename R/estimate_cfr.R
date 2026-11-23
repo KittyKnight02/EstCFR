@@ -50,6 +50,10 @@
 #'   at a vector of (whole) days, e.g. `function(x) pgamma(x, shape = 2, scale = 5)`.
 #'   If "estimate" and the data are a linelist, a distribution of family
 #'   `parametric_delay_type` is fitted to the observed onset-to-death delays.
+#'   Note that delay distributions used must reflect the
+#'   start date chosen (e.g. use a first report to death delay for death if start
+#'   date = first report). Where possible the delay distribution estimate should be from
+#'   the same outbreak.
 #' @param parametric_delay_type Family of the parametric delay distribution,
 #'   one of "gamma", "weibull" or "lognormal". Used by "parametric_mixture", and
 #'   by "delay_adjusted" when the delay is fitted from a linelist.
@@ -138,7 +142,8 @@ estimate_cfr <- function(data,
          call. = FALSE)
   }
 
-  check_dataset(data, dataset_type, method, delay_dist)
+  check_dataset(data, dataset_type)
+  check_method_inputs(data, dataset_type, method, delay_dist)
   time_points <- resolve_time_points(time_points, data, dataset_type)
 
   rows <- lapply(time_points, function(tp) {
@@ -164,20 +169,38 @@ estimate_cfr <- function(data,
 # Input checking
 # ---------------------------------------------------------------------------
 
+# Check that the (already format-checked) dataset has what the chosen method needs.
+check_method_inputs <- function(data, dataset_type, method, delay_dist = NULL) {
+  if (dataset_type == "count") {
+    if (method %in% c("competing_risks", "adapted_kaplan_meier", "parametric_mixture")) {
+      stop('Method "', method, '" needs individual-level data: use a linelist ',
+           'with dataset_type = "linelist".', call. = FALSE)
+    }
+    if (method == "delay_adjusted" && is.null(delay_dist)) {
+      stop('Method "delay_adjusted" with count data needs `delay_dist`.', call. = FALSE)
+    }
+    if (method == "resolved" && !"recoveries_total" %in% names(data)) {
+      bad_format('Method "resolved" needs a `recoveries_total` column.')
+    }
+  }
+  invisible(data)
+}
+
 # Stop with a message that sends the user to prepare_dataset().
 bad_format <- function(...) {
   stop(..., "\nUse prepare_dataset() to put your data in the format estimate_cfr() needs.",
        call. = FALSE)
 }
 
-# Check that the dataset is in the format the chosen method needs. Changes nothing:
+# Check that the dataset is in the format estimate_cfr() needs. Changes nothing:
 # either returns `data` untouched (invisibly) or stops with an error.
 #
 # Count data: columns `date` (Date, strictly increasing), cumulative `cases_total`
-# and `deaths_total` (plus `recoveries_total` for "resolved"), all non-decreasing.
+# and `deaths_total` (and optionally `recoveries_total`), all non-decreasing.
 # Linelist: columns `start_date` and `outcome_date` (Date) and `event`
 # ("death", "recovery" or NA for no outcome yet).
-check_dataset <- function(data, dataset_type, method, delay_dist = NULL) {
+# Whether a method can use the dataset is checked separately, by check_method_inputs().
+check_dataset <- function(data, dataset_type) {
   if (!is.data.frame(data)) {
     bad_format("`data` must be a data frame.")
   }
@@ -186,7 +209,7 @@ check_dataset <- function(data, dataset_type, method, delay_dist = NULL) {
   }
 
   required <- if (dataset_type == "count") {
-    c("date", "cases_total", "deaths_total", if (method == "resolved") "recoveries_total")
+    c("date", "cases_total", "deaths_total")
   } else {
     c("start_date", "outcome_date", "event")
   }
@@ -197,15 +220,6 @@ check_dataset <- function(data, dataset_type, method, delay_dist = NULL) {
   }
 
   if (dataset_type == "count") {
-    # (not format problems: these methods cannot use count data at all)
-    if (method %in% c("competing_risks", "adapted_kaplan_meier", "parametric_mixture")) {
-      stop('Method "', method, '" needs individual-level data: use a linelist ',
-           'with dataset_type = "linelist".', call. = FALSE)
-    }
-    if (method == "delay_adjusted" && is.null(delay_dist)) {
-      stop('Method "delay_adjusted" with count data needs `delay_dist`.', call. = FALSE)
-    }
-
     if (!inherits(data$date, "Date")) bad_format("Column `date` must be of class Date.")
     if (anyNA(data$date)) bad_format("Column `date` contains missing values.")
     if (anyDuplicated(data$date)) bad_format("Column `date` contains duplicated dates.")
@@ -225,7 +239,7 @@ check_dataset <- function(data, dataset_type, method, delay_dist = NULL) {
     if (any(data$deaths_total > data$cases_total)) {
       bad_format("`deaths_total` exceeds `cases_total` on at least one date.")
     }
-    if (method == "resolved" &&
+    if ("recoveries_total" %in% names(data) &&
         any(data$deaths_total + data$recoveries_total > data$cases_total)) {
       bad_format("`deaths_total` + `recoveries_total` exceeds `cases_total` on at least one date.")
     }
@@ -362,16 +376,16 @@ cfr_resolved <- function(data, dataset_type, CI_method, alpha){
 cfr_delay_adjusted <- function(data, dataset_type, CI_method, alpha,
                                delay_dist, parametric_delay_type){
   if (dataset_type == "count") {
-    # fill in unreported days by carrying cumulative counts forward
-    dates <- seq(min(data$date), max(data$date), by = "day")
-    idx <- findInterval(as.numeric(dates), as.numeric(data$date))
-    cases_daily <- diff(c(0, data$cases_total[idx]))
+    # new cases at each date, and the age in days of each batch at the last date
+    cases_daily <- diff(c(0, data$cases_total))
+    ages <- as.numeric(max(data$date) - data$date)
     total_deaths <- data$deaths_total[nrow(data)]
   } else {
     tp <- attr(data, "analysis_date")
     dates <- seq(min(data$start_date), tp, by = "day")
     cases_daily <- as.numeric(table(factor(as.character(data$start_date),
                                            levels = as.character(dates))))
+    ages <- as.numeric(tp - dates)
     total_deaths <- sum(data$event == "death")
     if (is.null(delay_dist)) {
       delays <- as.numeric(data$outcome_date - data$start_date)[data$event == "death"]
@@ -384,7 +398,6 @@ cfr_delay_adjusted <- function(data, dataset_type, CI_method, alpha,
     }
   }
 
-  ages <- rev(seq_along(cases_daily) - 1)   # days since each daily cohort started
   known_outcome_prob <- pmin(pmax(as.numeric(delay_dist(ages)), 0), 1)
   if (anyNA(known_outcome_prob)) {
     stop("`delay_dist` returned missing values.", call. = FALSE)

@@ -28,7 +28,11 @@ the "Data formats" section.}
 returning the cumulative distribution function of the onset-to-death delay
 at a vector of (whole) days, e.g. \code{function(x) pgamma(x, shape = 2, scale = 5)}.
 If "estimate" and the data are a linelist, a distribution of family
-\code{parametric_delay_type} is fitted to the observed onset-to-death delays.}
+\code{parametric_delay_type} is fitted to the observed onset-to-death delays.
+Note that delay distributions used must reflect the
+start date chosen (e.g. use a first report to death delay for death if start
+date = first report). Where possible the delay distribution estimate should be from
+the same outbreak.}
 
 \item{parametric_delay_type}{Family of the parametric delay distribution,
 one of "gamma", "weibull" or "lognormal". Used by "parametric_mixture", and

@@ -2,10 +2,106 @@
 % Please edit documentation in R/prepare_dataset.R
 \name{prepare_dataset}
 \alias{prepare_dataset}
-\title{This function adapts the data into the required form for estimate_cfr}
+\title{Put a dataset into the format needed by estimate_cfr}
 \usage{
-prepare_dataset()
+prepare_dataset(
+  data,
+  dataset_type,
+  date_format = NULL,
+  cumulative,
+  correct_decreases = FALSE,
+  date = "date",
+  cases_total = "cases_total",
+  deaths_total = "deaths_total",
+  recoveries_total = "recoveries_total",
+  start_date = "start_date",
+  outcome_date = "outcome_date",
+  event = "event",
+  death_label = "death",
+  recovery_label = "recovery"
+)
+}
+\arguments{
+\item{data}{Your dataset, a data frame.}
+
+\item{dataset_type}{One of "count" (one row per date) or "linelist" (one row per
+case).}
+
+\item{date_format}{Format of the dates if they are stored as text, as used by
+\code{\link[=strptime]{strptime()}}, e.g. \code{"\%d/\%m/\%Y"} for 31/12/2014 or \code{"\%Y-\%m-\%d"} for 2014-12-31.
+Not needed for columns that are already of class Date.}
+
+\item{cumulative}{Count data only: \code{TRUE} if \code{cases_total}, \code{deaths_total} (and
+\code{recoveries_total}) are already cumulative totals, \code{FALSE} if they are new cases,
+deaths and recoveries per day, which are then converted to cumulative totals.}
+
+\item{correct_decreases}{Count data with \code{cumulative = TRUE} only. If \code{FALSE} (the
+default), cumulative counts that go down are an error. If \code{TRUE}, each downward
+revision is corrected by scaling all earlier values in that column by
+\code{current / previous} (the new value over the value just before it) and rounding to
+the nearest whole number (halves to even, as numpy's \code{rint}). Rows are processed
+in date order and each column separately, and later revisions act on the already
+corrected earlier values. The result is a series that never goes down.}
+
+\item{date, cases_total, deaths_total, recoveries_total}{Count data only: the names of
+the columns in \code{data} holding the date and the cases, deaths and recoveries.
+\code{recoveries_total} is optional (only the "resolved" method needs it): leave it
+out if your data have no recoveries.}
+
+\item{start_date, outcome_date, event}{Linelist only: the names of the columns in
+\code{data} holding the date the case started (onset or first report), the date of its
+outcome, and what the outcome was.}
+
+\item{death_label, recovery_label}{Linelist only: the values in the \code{event} column
+that mean death and recovery respectively. Can be vectors, e.g. \code{c("died", "dead")}. Matching
+ignores case and surrounding spaces.}
+}
+\value{
+A data frame ready for \code{\link[=estimate_cfr]{estimate_cfr()}}. For count data: columns \code{date},
+\code{cases_total}, \code{deaths_total} and, if given, \code{recoveries_total}. For a linelist:
+\code{start_date}, \code{outcome_date} and \code{event}.
 }
 \description{
-This function adapts the data into the required form for estimate_cfr
+Takes a dataset with your own column names and date format and returns a data
+frame in the format \code{estimate_cfr()} requires (see "Data formats" in
+\code{\link[=estimate_cfr]{estimate_cfr()}}). Your data are not modified; a new data frame is returned.
+}
+\details{
+For count data, columns are renamed, dates parsed, rows sorted by date and, if
+the counts are per-day (\code{cumulative = FALSE}), converted to cumulative counts.
+
+For a linelist, columns are renamed, dates parsed and outcomes recoded to
+\code{"death"}, \code{"recovery"} or \code{NA} (no outcome yet). Outcome values other than the
+death and recovery labels you give are treated as "no outcome yet" and reported in
+a message. Cases with a missing start date or an outcome date before the start
+date are dropped with a warning. Note that delay distributions used must reflect the
+start date chosen (e.g. use a first report to death delay for death if start
+date = first report). Where possible the delay distribution estimate should be from
+the same outbreak as the data.
+
+Problems that cannot be fixed automatically, such as missing, negative or
+non-numeric counts or duplicated dates, stop with an error that says where the
+problem is. Cumulative counts that go down also stop with an error, unless
+\code{correct_decreases = TRUE}.
+}
+\examples{
+# per-day counts with day/month/year dates and different column names
+daily <- data.frame(
+  day = c("01/06/2014", "02/06/2014", "03/06/2014"),
+  new_cases = c(5, 4, 11),
+  new_deaths = c(1, 2, 5)
+)
+prepare_dataset(daily, dataset_type = "count", date_format = "\%d/\%m/\%Y",
+                cumulative = FALSE, date = "day", cases_total = "new_cases",
+                deaths_total = "new_deaths", recoveries_total = NULL)
+
+# linelist
+cases <- data.frame(
+  onset = c("2014-06-01", "2014-06-02", "2014-06-02"),
+  outcome_on = c("2014-06-08", "2014-06-12", NA),
+  status = c("Died", "Recovered", "Unknown")
+)
+prepare_dataset(cases, dataset_type = "linelist", date_format = "\%Y-\%m-\%d",
+                start_date = "onset", outcome_date = "outcome_on", event = "status",
+                death_label = "died", recovery_label = "recovered")
 }
